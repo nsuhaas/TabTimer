@@ -2,9 +2,6 @@
 
 A lightweight Chrome extension that shows how long each browser tab has been open — so you can finally close the ones you forgot about.
 
-<!-- screenshot: popup overview showing tabs grouped by age with colored badges -->
-> **Screenshot needed:** Open the extension popup with several tabs open across multiple age categories and take a full popup screenshot. Save as `screenshots/overview.png` and update the path below.
-
 ![TabTimer Popup Overview](screenshots/overview.png)
 
 ---
@@ -37,21 +34,12 @@ A lightweight Chrome extension that shows how long each browser tab has been ope
 ## Screenshots
 
 ### Popup overview
-<!-- screenshot: full popup with tabs in all four categories visible -->
-> Save a screenshot of the popup showing tabs in all four age categories as `screenshots/overview.png`
-
 ![Overview](screenshots/overview.png)
 
 ### Forgotten tabs bulk close
-<!-- screenshot: popup with the red "Close X Forgotten Tabs" button active -->
-> Save a screenshot with several red Forgotten tabs and the close button enabled as `screenshots/forgotten.png`
-
 ![Forgotten Tabs](screenshots/forgotten.png)
 
 ### Search filtering
-<!-- screenshot: search bar with a query typed, filtered list shown -->
-> Type a search term in the popup and save a screenshot as `screenshots/search.png`
-
 ![Search](screenshots/search.png)
 
 ---
