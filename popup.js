@@ -240,6 +240,188 @@ document.getElementById('closeOldBtn').addEventListener('click', async () => {
 });
 
 document.getElementById('refreshBtn').addEventListener('click', loadData);
+document.getElementById('aiGroupBtn').addEventListener('click', groupByAI);
+
+// ─── AI Tab Grouping ──────────────────────────────────────────────────────────
+
+const VALID_GROUP_COLORS = new Set([
+  'grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange',
+]);
+
+function buildGroupingPrompt(tabs) {
+  const lines = tabs.map(t => {
+    let host = '';
+    try { host = new URL(t.url).hostname.replace(/^www\./, ''); } catch { host = t.url; }
+    return `${t.id}: ${t.title} | ${host}`;
+  });
+  return `Group these browser tabs by topic. Reply with ONLY valid JSON — no explanation, no markdown fences:
+{
+  "groups": [
+    {"name": "Group Name", "color": "blue", "tabIds": [123, 456]}
+  ]
+}
+
+Available colors: grey, blue, red, yellow, green, pink, purple, cyan, orange
+Rules: create 2–6 meaningful topic groups; each tab belongs in at most one group; tabs with no clear group can be omitted.
+
+Tabs:
+${lines.join('\n')}`;
+}
+
+function parseGroupingResponse(text) {
+  const tryParse = str => {
+    try {
+      const obj = JSON.parse(str);
+      if (!Array.isArray(obj?.groups)) return null;
+      const valid = obj.groups
+        .filter(g => g.name && Array.isArray(g.tabIds) && g.tabIds.length > 0)
+        .map(g => ({
+          name: String(g.name).slice(0, 50),
+          color: VALID_GROUP_COLORS.has(g.color) ? g.color : 'blue',
+          tabIds: g.tabIds.filter(id => Number.isInteger(id)),
+        }))
+        .filter(g => g.tabIds.length > 0);
+      return valid.length > 0 ? valid : null;
+    } catch { return null; }
+  };
+  return tryParse(text) ?? tryParse((text.match(/\{[\s\S]*\}/) ?? [])[0] ?? '');
+}
+
+async function applyTabGroups(groups, allTabs) {
+  const tabToWindow = Object.fromEntries(allTabs.map(t => [t.id, t.windowId]));
+
+  // bucket: windowId → groupName → { name, color, tabIds[] }
+  const byWindow = {};
+  for (const g of groups) {
+    for (const id of g.tabIds) {
+      const winId = tabToWindow[id];
+      if (!winId) continue;
+      byWindow[winId] ??= {};
+      byWindow[winId][g.name] ??= { name: g.name, color: g.color, tabIds: [] };
+      byWindow[winId][g.name].tabIds.push(id);
+    }
+  }
+
+  let created = 0;
+  for (const windowGroups of Object.values(byWindow)) {
+    for (const g of Object.values(windowGroups)) {
+      if (!g.tabIds.length) continue;
+      try {
+        const gid = await chrome.tabs.group({ tabIds: g.tabIds });
+        await chrome.tabGroups.update(gid, { title: g.name, color: g.color });
+        created++;
+      } catch (e) {
+        console.warn('TabTimer: failed to create group', g.name, e);
+      }
+    }
+  }
+  return created;
+}
+
+function showAiBanner(type, msg, action) {
+  const el = document.getElementById('aiBanner');
+  el.hidden = false;
+  el.className = 'ai-banner ai-banner--' + type;
+  el.replaceChildren();
+
+  const icon = document.createElement('span');
+  icon.className = 'ai-banner__icon';
+  if (type === 'loading') {
+    icon.innerHTML = '<span class="ai-spinner"></span>';
+  } else if (type === 'ok') {
+    icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>';
+  } else {
+    icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>';
+  }
+  el.appendChild(icon);
+
+  const text = document.createElement('span');
+  text.className = 'ai-banner__text';
+  text.textContent = msg;
+  el.appendChild(text);
+
+  if (action) {
+    const btn = document.createElement('button');
+    btn.className = 'ai-banner__action';
+    btn.textContent = action.label;
+    btn.addEventListener('click', action.fn);
+    el.appendChild(btn);
+  }
+
+  if (type !== 'loading') {
+    clearTimeout(el._hideTimer);
+    el._hideTimer = setTimeout(() => { el.hidden = true; }, 6000);
+  }
+}
+
+async function groupByAI() {
+  if (!chrome.tabGroups) {
+    showAiBanner('err', 'Tab Groups requires Chrome 89 or newer.');
+    return;
+  }
+
+  const { anthropicApiKey } = await chrome.storage.local.get('anthropicApiKey');
+  if (!anthropicApiKey) {
+    showAiBanner('warn', 'No API key set.', {
+      label: 'Open Settings',
+      fn: () => chrome.runtime.openOptionsPage(),
+    });
+    return;
+  }
+
+  const btn = document.getElementById('aiGroupBtn');
+  btn.disabled = true;
+  showAiBanner('loading', 'Analyzing tabs with AI…');
+
+  try {
+    const allTabs = await chrome.tabs.query({});
+    const groupable = allTabs.filter(
+      t => t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('about:')
+    );
+
+    if (groupable.length < 2) {
+      showAiBanner('warn', 'Not enough tabs to group (need at least 2).');
+      return;
+    }
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-8',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: buildGroupingPrompt(groupable) }],
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401) throw new Error('Invalid API key — check Settings.');
+      throw new Error(body.error?.message || `API error ${res.status}`);
+    }
+
+    const data = await res.json();
+    const groups = parseGroupingResponse(data.content?.[0]?.text ?? '');
+
+    if (!groups || groups.length === 0) {
+      showAiBanner('err', 'Could not determine groups — try again.');
+      return;
+    }
+
+    const count = await applyTabGroups(groups, allTabs);
+    const names = groups.map(g => g.name).join(', ');
+    showAiBanner('ok', `Created ${count} group${count !== 1 ? 's' : ''}: ${names}`);
+
+  } catch (err) {
+    showAiBanner('err', err.message || 'Something went wrong.');
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 

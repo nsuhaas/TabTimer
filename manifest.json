@@ -1,9 +1,11 @@
 {
   "manifest_version": 3,
   "name": "TabTimer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Shows how long each browser tab has been open. Helps you close tabs you forgot about.",
-  "permissions": ["tabs", "storage", "alarms", "windows"],
+  "permissions": ["tabs", "storage", "alarms", "windows", "tabGroups"],
+  "host_permissions": ["https://api.anthropic.com/*"],
+  "options_page": "options.html",
   "background": {
     "service_worker": "background.js"
   },
